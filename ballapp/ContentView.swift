@@ -1,5 +1,23 @@
 import SwiftUI
-internal import Combine
+import Combine
+#if os(macOS)
+import AppKit
+public typealias PlatformImage = NSImage
+public extension Image {
+    init(platformImage: NSImage) {
+        self = Image(nsImage: platformImage)
+    }
+}
+#else
+import UIKit
+import PhotosUI
+public typealias PlatformImage = UIImage
+public extension Image {
+    init(platformImage: UIImage) {
+        self = Image(uiImage: platformImage)
+    }
+}
+#endif
 
 // MARK: - Size reading helpers for measuring the controls overlay (file-scoped)
 private struct HeightPreferenceKey: PreferenceKey {
@@ -35,6 +53,15 @@ struct ContentView: View {
     @State private var isRunning: Bool = true
     @State private var ballColor: Color = .blue
     @State private var isRainbowMode: Bool = false
+    
+    @State private var selectedImage: PlatformImage? = nil
+    @State private var useImageForBalls: Bool = false
+    
+    #if !os(macOS)
+    @State private var showPhotoPicker: Bool = false
+    @State private var pickedItem: PhotosPickerItem? = nil
+    #endif
+    
     @State private var rainbowHue: Double = 0.0
     @State private var isGravityEnabled: Bool = false
     @State private var isDragging: Bool = false
@@ -138,6 +165,42 @@ struct ContentView: View {
             }
         }
     }
+    
+    private func currentHalfExtents(for image: PlatformImage?) -> (halfW: CGFloat, halfH: CGFloat) {
+        if useImageForBalls, let img = image {
+            // Displayed height is 2x ballSize; width depends on aspect ratio
+            let displayH = ballSize * 5 // matches current rendering height
+            #if os(macOS)
+            let imgSize = img.size
+            #else
+            let imgSize = img.size
+            #endif
+            let aspect = imgSize.width > 0 ? (imgSize.width / imgSize.height) : 1
+            let displayW = displayH * aspect
+            return (displayW / 2, displayH / 2)
+        } else {
+            let r = ballSize / 2
+            return (r, r)
+        }
+    }
+
+    private func pickImage() {
+        #if os(macOS)
+        let panel = NSOpenPanel()
+        panel.allowedFileTypes = ["png", "jpg", "jpeg", "heic", "tiff", "gif", "bmp"]
+        panel.allowsMultipleSelection = false
+        panel.canChooseDirectories = false
+        panel.begin { response in
+            if response == .OK, let url = panel.url, let img = NSImage(contentsOf: url) {
+                self.selectedImage = img
+                self.useImageForBalls = true
+            }
+        }
+        #else
+        // iOS placeholder: not requested, but keep state consistent
+        useImageForBalls = false
+        #endif
+    }
 
     var body: some View {
         GeometryReader { geo in
@@ -146,67 +209,76 @@ struct ContentView: View {
 
                 // Balls
                 ForEach(Array(balls.enumerated()), id: \.element.id) { index, ball in
-                    Circle()
-                        .fill(
-                            LinearGradient(colors: [ballColor.opacity(0.95), ballColor],
-                                           startPoint: .topLeading,
-                                           endPoint: .bottomTrailing)
-                        )
-                        .frame(width: ballSize, height: ballSize)
-                        .shadow(color: ballColor.opacity(0.6), radius: 10, x: 0, y: 6)
-                        .position(x: ball.position.x, y: ball.position.y)
-                        .accessibilityLabel("Bouncing Ball")
-                        .gesture(
-                            DragGesture()
-                                .onChanged { value in
-                                    if !isDragging {
-                                        isDragging = true
-                                        draggingBallIndex = index
-                                        dragStartPosition = ball.position
-                                        recentVelocities = []
-                                        lastDragTime = value.time
-                                        lastDragLocation = value.location
-                                    }
-                                    // Only respond to the active ball index
-                                    guard draggingBallIndex == index else { return }
-
-                                    let radius = ballSize / 2
-                                    let clampedX = min(max(value.location.x, radius), geo.size.width - radius)
-                                    let clampedY = min(max(value.location.y, radius), geo.size.height - radius)
-                                    let newPos = CGPoint(x: clampedX, y: clampedY)
-
-                                    let dt = max(1.0/240.0, lastDragTime.map { value.time.timeIntervalSince($0) } ?? (1.0/60.0))
-                                    let dx = newPos.x - lastDragLocation.x
-                                    let dy = newPos.y - lastDragLocation.y
-                                    let instVel = CGVector(dx: dx / dt, dy: dy / dt)
-
-                                    recentVelocities.append(instVel)
-                                    if recentVelocities.count > 4 { recentVelocities.removeFirst() }
-
-                                    lastDragTime = value.time
-                                    lastDragLocation = newPos
-
-                                    if let i = draggingBallIndex { balls[i].position = newPos }
-                                }
-                                .onEnded { value in
-                                    // Only apply if this ball was the active drag target
-                                    guard draggingBallIndex == index else { return }
-                                    let count = recentVelocities.count
-                                    if count > 0 {
-                                        let sum = recentVelocities.reduce(CGVector(dx: 0, dy: 0)) { partial, v in
-                                            CGVector(dx: partial.dx + v.dx, dy: partial.dy + v.dy)
-                                        }
-                                        let avg = CGVector(dx: sum.dx / CGFloat(count), dy: sum.dy / CGFloat(count))
-                                        let perFrame = CGVector(dx: avg.dx / 60.0, dy: avg.dy / 60.0)
-                                        let clamped = clampMagnitude(perFrame, max: terminalSpeed)
-                                        if let i = draggingBallIndex { balls[i].velocity = clamped }
-                                    }
-                                    lastDragTime = nil
+                    Group {
+                        if useImageForBalls, let image = selectedImage {
+                            Image(platformImage: image)
+                                .resizable()
+                                .scaledToFit()
+                                .frame(height: ballSize * 5)
+                        } else {
+                            Circle()
+                                .fill(
+                                    LinearGradient(colors: [ballColor.opacity(0.95), ballColor],
+                                                   startPoint: .topLeading,
+                                                   endPoint: .bottomTrailing)
+                                )
+                                .frame(width: ballSize, height: ballSize)
+                                .shadow(color: ballColor.opacity(0.6), radius: 10, x: 0, y: 6)
+                        }
+                    }
+                    .position(x: ball.position.x, y: ball.position.y)
+                    .accessibilityLabel("Bouncing Ball")
+                    .gesture(
+                        DragGesture()
+                            .onChanged { value in
+                                if !isDragging {
+                                    isDragging = true
+                                    draggingBallIndex = index
+                                    dragStartPosition = ball.position
                                     recentVelocities = []
-                                    isDragging = false
-                                    draggingBallIndex = nil
+                                    lastDragTime = value.time
+                                    lastDragLocation = value.location
                                 }
-                        )
+                                // Only respond to the active ball index
+                                guard draggingBallIndex == index else { return }
+
+                                let extents = currentHalfExtents(for: selectedImage)
+                                let clampedX = min(max(value.location.x, extents.halfW), geo.size.width - extents.halfW)
+                                let clampedY = min(max(value.location.y, extents.halfH), geo.size.height - extents.halfH)
+                                let newPos = CGPoint(x: clampedX, y: clampedY)
+
+                                let dt = max(1.0/240.0, lastDragTime.map { value.time.timeIntervalSince($0) } ?? (1.0/60.0))
+                                let dx = newPos.x - lastDragLocation.x
+                                let dy = newPos.y - lastDragLocation.y
+                                let instVel = CGVector(dx: dx / dt, dy: dy / dt)
+
+                                recentVelocities.append(instVel)
+                                if recentVelocities.count > 4 { recentVelocities.removeFirst() }
+
+                                lastDragTime = value.time
+                                lastDragLocation = newPos
+
+                                if let i = draggingBallIndex { balls[i].position = newPos }
+                            }
+                            .onEnded { value in
+                                // Only apply if this ball was the active drag target
+                                guard draggingBallIndex == index else { return }
+                                let count = recentVelocities.count
+                                if count > 0 {
+                                    let sum = recentVelocities.reduce(CGVector(dx: 0, dy: 0)) { partial, v in
+                                        CGVector(dx: partial.dx + v.dx, dy: partial.dy + v.dy)
+                                    }
+                                    let avg = CGVector(dx: sum.dx / CGFloat(count), dy: sum.dy / CGFloat(count))
+                                    let perFrame = CGVector(dx: avg.dx / 60.0, dy: avg.dy / 60.0)
+                                    let clamped = clampMagnitude(perFrame, max: terminalSpeed)
+                                    if let i = draggingBallIndex { balls[i].velocity = clamped }
+                                }
+                                lastDragTime = nil
+                                recentVelocities = []
+                                isDragging = false
+                                draggingBallIndex = nil
+                            }
+                    )
                 }
 
                 // Controls overlay
@@ -226,6 +298,9 @@ struct ContentView: View {
                                     ballSize = defaultBallSize
                                     ballColor = .blue
                                     isRainbowMode = false
+                                    // removed clearing image here
+                                    //selectedImage = nil
+                                    //useImageForBalls = false
                                     rainbowHue = 0.0
                                     isGravityEnabled = false
                                     isDragging = false
@@ -251,6 +326,7 @@ struct ContentView: View {
                                 }
                             }
                             .buttonStyle(.bordered)
+                            
                         }
 
                         HStack(alignment: .center, spacing: 12) {
@@ -279,27 +355,45 @@ struct ContentView: View {
                             }
 
                             // Color controls on the right
-                            HStack(spacing: 8) {
-                                ColorPicker("Ball Color", selection: $ballColor, supportsOpacity: false)
-                                    .labelsHidden()
-                                    .frame(width: 44, height: 44)
-
-                                Button(isRainbowMode ? "Rainbow: On" : "Rainbow: Off") {
-                                    isRainbowMode.toggle()
+                            VStack(alignment: .leading, spacing: 8) {
+                                HStack(alignment: .center, spacing: 8) {
+                                    ColorPicker("Ball Color", selection: $ballColor, supportsOpacity: false)
+                                        .labelsHidden()
+                                        .frame(width: 44, height: 44)
+                                    Button(isRainbowMode ? "Rainbow: On" : "Rainbow: Off") {
+                                        isRainbowMode.toggle()
+                                    }
+                                    .buttonStyle(.bordered)
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text("Balls").font(.caption)
+                                        TextField("Count", text: $ballCountText)
+                                            .textFieldStyle(.roundedBorder)
+                                            .frame(width: 80)
+                                            .onSubmit {
+                                                let n = Int(ballCountText) ?? ballCount
+                                                ballCount = clampBallCount(n)
+                                                ballCountText = String(ballCount)
+                                                reseedBalls(in: geo.size)
+                                            }
+                                    }
                                 }
-                                .buttonStyle(.bordered)
-
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text("Balls").font(.caption)
-                                    TextField("Count", text: $ballCountText)
-                                        .textFieldStyle(.roundedBorder)
-                                        .frame(width: 80)
-                                        .onSubmit {
-                                            let n = Int(ballCountText) ?? ballCount
-                                            ballCount = clampBallCount(n)
-                                            ballCountText = String(ballCount)
-                                            reseedBalls(in: geo.size)
-                                        }
+                                HStack(spacing: 8) {
+                                    #if os(macOS)
+                                    Button("Choose Image") {
+                                        pickImage()
+                                    }
+                                    .buttonStyle(.bordered)
+                                    #else
+                                    PhotosPicker(selection: $pickedItem, matching: .images, photoLibrary: .shared()) {
+                                        Text("Choose Image")
+                                    }
+                                    .buttonStyle(.bordered)
+                                    #endif
+                                    Button("Clear Image") {
+                                        selectedImage = nil
+                                        useImageForBalls = false
+                                    }
+                                    .buttonStyle(.bordered)
                                 }
                             }
                         }
@@ -318,6 +412,19 @@ struct ContentView: View {
                 ballCountText = String(ballCount)
                 reseedBalls(in: geo.size)
             }
+            #if !os(macOS)
+            .onChange(of: pickedItem) { oldValue, newValue in
+                guard let item = newValue else { return }
+                Task {
+                    if let data = try? await item.loadTransferable(type: Data.self) {
+                        if let uiImage = UIImage(data: data) {
+                            self.selectedImage = uiImage
+                            self.useImageForBalls = true
+                        }
+                    }
+                }
+            }
+            #endif
             .onReceive(Timer.publish(every: 1.0/60.0, on: .main, in: .common).autoconnect()) { _ in
                 // Rainbow color cycling
                 if isRainbowMode {
@@ -340,13 +447,15 @@ struct ContentView: View {
             .onReceive(Timer.publish(every: 1.0/60.0, on: .main, in: .common).autoconnect()) { _ in
                 guard isRunning && !isDragging else { return }
 
-                let radius = ballSize / 2
-                let minX = radius
-                let maxX = geo.size.width - radius
-                let maxY = geo.size.height - radius - controlsHeight
-                let minY = radius
+                let baseRadius = ballSize / 2
 
                 for i in balls.indices {
+                    let extents = currentHalfExtents(for: selectedImage)
+                    let minX = extents.halfW
+                    let maxX = geo.size.width - extents.halfW
+                    let minY = extents.halfH
+                    let maxY = geo.size.height - extents.halfH - controlsHeight
+
                     if isGravityEnabled {
                         var vx = balls[i].velocity.dx * speedMultiplier
                         var vy = balls[i].velocity.dy * speedMultiplier
