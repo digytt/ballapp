@@ -330,6 +330,8 @@ struct ContentView: View {
     @State private var isDragging: Bool = false
     @State private var dragStartPosition: CGPoint = .zero
     @State private var speedMultiplier: CGFloat = 1.0
+    @State private var dragMultiplier: CGFloat = 0.995
+    @State private var gravityIntensity: CGFloat = 1.0
     @State private var controlsHeight: CGFloat = 0
     @State private var isControlsMinimized: Bool = false
     
@@ -343,14 +345,14 @@ struct ContentView: View {
     @State private var ballCountText: String = "1"
 
     // Physics constants
-    private let gravity: CGFloat = 980.0 / 60.0 / 60.0 // ~980 px/s^2 scaled to px/frame^2 for 60 FPS
-    private let airDrag: CGFloat = 0.995               // multiplicative drag per frame (close to 1.0)
+    private let baseGravity: CGFloat = 980.0 / 60.0 / 60.0 // ~980 px/s^2 scaled to px/frame^2 for 60 FPS
+    private let defaultAirDrag: CGFloat = 0.995               // multiplicative drag per frame (close to 1.0)
     private let restitution: CGFloat = 0.75            // bounciness 0..1 (1 is perfectly elastic)
     private let groundFriction: CGFloat = 0.98         // horizontal energy loss when on floor/walls
     private let terminalSpeed: CGFloat = 1200.0 / 60.0 // clamp speed to avoid tunneling (px/frame)
 
     private func applyAirDrag(_ v: CGFloat) -> CGFloat {
-        v * airDrag
+        v * dragMultiplier
     }
 
     private func clampMagnitude(_ v: CGVector, max m: CGFloat) -> CGVector {
@@ -652,6 +654,8 @@ struct ContentView: View {
                                         isDragging = false
                                         dragStartPosition = .zero
                                         speedMultiplier = 1.0
+                                        dragMultiplier = defaultAirDrag
+                                        gravityIntensity = 1.0
                                     }
                                     .buttonStyle(.bordered)
                                 }
@@ -668,6 +672,8 @@ struct ContentView: View {
                                             balls[i].velocity = CGVector(dx: 3, dy: 4)
                                         }
                                         initialVelocity = CGVector(dx: 3, dy: 4)
+                                        dragMultiplier = defaultAirDrag
+                                        gravityIntensity = 1.0
                                     }
                                 }
                                 .buttonStyle(.bordered)
@@ -695,6 +701,30 @@ struct ContentView: View {
                                         ), in: 0.2...3.0)
                                         Text(String(format: "x%.1f", Double(speedMultiplier))).font(.caption)
                                     }
+                                    
+                                    // Drag (air resistance) — enabled only when gravity is on
+                                    HStack(spacing: 12) {
+                                        Text("Drag").font(.caption)
+                                        Slider(value: Binding(
+                                            get: { dragMultiplier },
+                                            set: { newVal in dragMultiplier = max(0.90, min(newVal, 1.0)) }
+                                        ), in: 0.90...1.0)
+                                        Text(String(format: "%.3f", Double(dragMultiplier))).font(.caption).monospacedDigit()
+                                    }
+                                    .disabled(!isGravityEnabled)
+                                    .opacity(isGravityEnabled ? 1.0 : 0.5)
+
+                                    // Gravity intensity — enabled only when gravity is on
+                                    HStack(spacing: 12) {
+                                        Text("Gravity").font(.caption)
+                                        Slider(value: Binding(
+                                            get: { gravityIntensity },
+                                            set: { newVal in gravityIntensity = max(0.0, min(newVal, 2.0)) }
+                                        ), in: 0.0...2.0)
+                                        Text(String(format: "x%.1f", Double(gravityIntensity))).font(.caption)
+                                    }
+                                    .disabled(!isGravityEnabled)
+                                    .opacity(isGravityEnabled ? 1.0 : 0.5)
                                 }
 
                                 VStack(alignment: .leading, spacing: 8) {
@@ -805,7 +835,7 @@ struct ContentView: View {
                     speedMultiplier: $speedMultiplier,
                     colorMode: $colorMode,
                     ballColor: $ballColor,
-                    onReset: { reseedBalls(in: geo.size); initialVelocity = CGVector(dx: 3, dy: 4); ballSize = defaultBallSize; ballColor = .blue; for i in balls.indices { balls[i].color = .blue }; colorMode = .static; rainbowHue = 0.0; isGravityEnabled = false; isDragging = false; dragStartPosition = .zero; speedMultiplier = 1.0 }
+                    onReset: { reseedBalls(in: geo.size); initialVelocity = CGVector(dx: 3, dy: 4); ballSize = defaultBallSize; ballColor = .blue; for i in balls.indices { balls[i].color = .blue }; colorMode = .static; rainbowHue = 0.0; isGravityEnabled = false; isDragging = false; dragStartPosition = .zero; speedMultiplier = 1.0; dragMultiplier = defaultAirDrag; gravityIntensity = 1.0 }
                 )
             )
 #else
@@ -858,7 +888,7 @@ struct ContentView: View {
                 if isRunning && isGravityEnabled && !isDragging {
                     for i in balls.indices {
                         var v = balls[i].velocity
-                        v.dy += gravity
+                        v.dy += baseGravity * gravityIntensity
                         v.dx = applyAirDrag(v.dx)
                         v.dy = applyAirDrag(v.dy)
                         balls[i].velocity = clampMagnitude(v, max: terminalSpeed)
