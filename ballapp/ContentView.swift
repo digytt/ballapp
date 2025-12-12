@@ -331,6 +331,7 @@ struct ContentView: View {
     @State private var dragStartPosition: CGPoint = .zero
     @State private var speedMultiplier: CGFloat = 1.0
     @State private var controlsHeight: CGFloat = 0
+    @State private var isControlsMinimized: Bool = false
     
     @State private var draggingBallIndex: Int? = nil
 
@@ -599,130 +600,182 @@ struct ContentView: View {
                 // Controls overlay
                 VStack {
                     Spacer()
-                    HStack {
-                        VStack(spacing: 8) {
-                            HStack(spacing: 8) {
-                                Button(isRunning ? "Pause" : "Resume") {
-                                    isRunning.toggle()
-                                }
-                                .buttonStyle(.borderedProminent)
 
-                                Button("Reset") {
-                                    reseedBalls(in: geo.size)
-                                    initialVelocity = CGVector(dx: 3, dy: 4)
-                                    ballSize = defaultBallSize
-                                    ballColor = .blue
-                                    for i in balls.indices { balls[i].color = .blue }
-                                    colorMode = .static
-                                    // removed clearing image here
-                                    //selectedImage = nil
-                                    //useImageForBalls = false
-                                    rainbowHue = 0.0
-                                    isGravityEnabled = false
-                                    isDragging = false
-                                    dragStartPosition = .zero
-                                    speedMultiplier = 1.0
+                    if isControlsMinimized {
+                        HStack {
+                            Spacer()
+                            Button {
+                                withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
+                                    isControlsMinimized = false
+                                }
+                            } label: {
+                                HStack(spacing: 6) {
+                                    Image(systemName: "slider.horizontal.3")
+                                    Text("Controls")
+                                }
+                                .padding(.horizontal, 14)
+                                .padding(.vertical, 10)
+                                .background(.ultraThinMaterial, in: Capsule())
+                                .overlay(
+                                    Capsule().strokeBorder(Color.white.opacity(0.25), lineWidth: 1)
+                                )
+                                .shadow(color: Color.black.opacity(0.25), radius: 12, x: 0, y: 8)
+                            }
+                            .buttonStyle(.plain)
+                            .padding(.trailing, 16)
+                        }
+                        .padding(.bottom, 16)
+                        .readHeight { _ in
+                            // When minimized, treat controls height as zero for physics bounds
+                            controlsHeight = 0
+                        }
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                    } else {
+                        // Expanded liquid glass panel
+                        HStack {
+                            VStack(spacing: 8) {
+                                HStack(spacing: 8) {
+                                    Button(isRunning ? "Pause" : "Resume") {
+                                        isRunning.toggle()
+                                    }
+                                    .buttonStyle(.borderedProminent)
+
+                                    Button("Reset") {
+                                        reseedBalls(in: geo.size)
+                                        initialVelocity = CGVector(dx: 3, dy: 4)
+                                        ballSize = defaultBallSize
+                                        ballColor = .blue
+                                        for i in balls.indices { balls[i].color = .blue }
+                                        colorMode = .static
+                                        rainbowHue = 0.0
+                                        isGravityEnabled = false
+                                        isDragging = false
+                                        dragStartPosition = .zero
+                                        speedMultiplier = 1.0
+                                    }
+                                    .buttonStyle(.bordered)
+                                }
+
+                                Button(isGravityEnabled ? "Gravity: On" : "Gravity: Off") {
+                                    let wasOn = isGravityEnabled
+                                    isGravityEnabled.toggle()
+                                    if wasOn && !isGravityEnabled {
+                                        let radius = ballSize / 2
+                                        let centerX = max(radius, min(geo.size.width - radius, geo.size.width / 2))
+                                        let centerY = max(radius, min(geo.size.height - radius, geo.size.height / 2))
+                                        for i in balls.indices {
+                                            balls[i].position = CGPoint(x: centerX, y: centerY)
+                                            balls[i].velocity = CGVector(dx: 3, dy: 4)
+                                        }
+                                        initialVelocity = CGVector(dx: 3, dy: 4)
+                                    }
                                 }
                                 .buttonStyle(.bordered)
                             }
 
-                            Button(isGravityEnabled ? "Gravity: On" : "Gravity: Off") {
-                                let wasOn = isGravityEnabled
-                                isGravityEnabled.toggle()
-                                if wasOn && !isGravityEnabled {
-                                    // When turning gravity off, reset position to center and speed to defaults
-                                    let radius = ballSize / 2
-                                    let centerX = max(radius, min(geo.size.width - radius, geo.size.width / 2))
-                                    let centerY = max(radius, min(geo.size.height - radius, geo.size.height / 2))
-                                    for i in balls.indices {
-                                        balls[i].position = CGPoint(x: centerX, y: centerY)
-                                        balls[i].velocity = CGVector(dx: 3, dy: 4)
-                                    }
-                                    initialVelocity = CGVector(dx: 3, dy: 4)
-                                }
-                            }
-                            .buttonStyle(.bordered)
-                            
-                        }
-
-                        HStack(alignment: .center, spacing: 12) {
-                            // Sliders on the left (size above speed)
-                            VStack(alignment: .leading, spacing: 8) {
-                                Slider(value: Binding(
-                                    get: { ballSize },
-                                    set: { newVal in ballSize = max(10, min(newVal, 120)) }
-                                ), in: 10...120) {
-                                    Text("Size")
-                                } minimumValueLabel: {
-                                    Text("Small").font(.caption)
-                                } maximumValueLabel: {
-                                    Text("Large").font(.caption)
-                                }
-                                .tint(.blue)
-
-                                HStack(spacing: 12) {
-                                    Text("Speed").font(.caption)
+                            HStack(alignment: .center, spacing: 12) {
+                                VStack(alignment: .leading, spacing: 8) {
                                     Slider(value: Binding(
-                                        get: { speedMultiplier },
-                                        set: { newVal in speedMultiplier = max(0.2, min(newVal, 3.0)) }
-                                    ), in: 0.2...3.0)
-                                    Text(String(format: "x%.1f", Double(speedMultiplier))).font(.caption)
-                                }
-                            }
+                                        get: { ballSize },
+                                        set: { newVal in ballSize = max(10, min(newVal, 120)) }
+                                    ), in: 10...120) {
+                                        Text("Size")
+                                    } minimumValueLabel: {
+                                        Text("Small").font(.caption)
+                                    } maximumValueLabel: {
+                                        Text("Large").font(.caption)
+                                    }
+                                    .tint(.blue)
 
-                            // Color controls on the right
-                            VStack(alignment: .leading, spacing: 8) {
-                                HStack(alignment: .center, spacing: 8) {
-                                    ColorPicker("Ball Color", selection: $ballColor, supportsOpacity: false)
-                                        .labelsHidden()
-                                        .frame(width: 44, height: 44)
-                                        .disabled(colorMode == .bounce || colorMode == .rainbow || useImageForBalls)
-                                    Picker("", selection: $colorMode) {
-                                        Text("Static").tag(ColorMode.static)
-                                        Text("Rainbow").tag(ColorMode.rainbow)
-                                        Text("Bounce").tag(ColorMode.bounce)
+                                    HStack(spacing: 12) {
+                                        Text("Speed").font(.caption)
+                                        Slider(value: Binding(
+                                            get: { speedMultiplier },
+                                            set: { newVal in speedMultiplier = max(0.2, min(newVal, 3.0)) }
+                                        ), in: 0.2...3.0)
+                                        Text(String(format: "x%.1f", Double(speedMultiplier))).font(.caption)
                                     }
-                                    .pickerStyle(.segmented)
-                                    .frame(maxWidth: 220)
-                                    .disabled(useImageForBalls)
                                 }
-                                HStack(spacing: 8) {
-                                    #if os(macOS)
-                                    Button("Choose Image") {
-                                        pickImage()
+
+                                VStack(alignment: .leading, spacing: 8) {
+                                    HStack(alignment: .center, spacing: 8) {
+                                        ColorPicker("Ball Color", selection: $ballColor, supportsOpacity: false)
+                                            .labelsHidden()
+                                            .frame(width: 44, height: 44)
+                                            .disabled(colorMode == .bounce || colorMode == .rainbow || useImageForBalls)
+                                        Picker("", selection: $colorMode) {
+                                            Text("Static").tag(ColorMode.static)
+                                            Text("Rainbow").tag(ColorMode.rainbow)
+                                            Text("Bounce").tag(ColorMode.bounce)
+                                        }
+                                        .pickerStyle(.segmented)
+                                        .frame(maxWidth: 220)
+                                        .disabled(useImageForBalls)
                                     }
-                                    .buttonStyle(.bordered)
-                                    #else
-                                    PhotosPicker(selection: $pickedItem, matching: .images, photoLibrary: .shared()) {
-                                        Text("Choose Image")
+                                    HStack(spacing: 8) {
+                                        #if os(macOS)
+                                        Button("Choose Image") {
+                                            pickImage()
+                                        }
+                                        .buttonStyle(.bordered)
+                                        #else
+                                        PhotosPicker(selection: $pickedItem, matching: .images, photoLibrary: .shared()) {
+                                            Text("Choose Image")
+                                        }
+                                        .buttonStyle(.bordered)
+                                        #endif
+                                        Button("Clear Image") {
+                                            selectedImage = nil
+                                            useImageForBalls = false
+                                        }
+                                        .buttonStyle(.bordered)
+
+                                        VStack(alignment: .leading, spacing: 4) {
+                                            TextField("Count", text: $ballCountText)
+                                                .textFieldStyle(.roundedBorder)
+                                                .frame(width: 80)
+                                                .onSubmit {
+                                                    let n = Int(ballCountText) ?? ballCount
+                                                    ballCount = clampBallCount(n)
+                                                    ballCountText = String(ballCount)
+                                                    reseedBalls(in: geo.size)
+                                                }
+                                        }
                                     }
-                                    .buttonStyle(.bordered)
-                                    #endif
-                                    Button("Clear Image") {
-                                        selectedImage = nil
-                                        useImageForBalls = false
+                                }
+
+                                // Minimize toggle
+                                VStack {
+                                    Button {
+                                        withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
+                                            isControlsMinimized = true
+                                        }
+                                    } label: {
+                                        Image(systemName: "chevron.down")
+                                            .font(.headline)
+                                            .padding(8)
+                                            .background(.thinMaterial, in: Circle())
                                     }
-                                    .buttonStyle(.bordered)
-                                    
-                                    VStack(alignment: .leading, spacing: 4) {
-                                        TextField("Count", text: $ballCountText)
-                                            .textFieldStyle(.roundedBorder)
-                                            .frame(width: 80)
-                                            .onSubmit {
-                                                let n = Int(ballCountText) ?? ballCount
-                                                ballCount = clampBallCount(n)
-                                                ballCountText = String(ballCount)
-                                                reseedBalls(in: geo.size)
-                                            }
-                                    }
+                                    .buttonStyle(.plain)
                                 }
                             }
                         }
-                    }
-                    .padding()
-                    .background(.ultraThinMaterial)
-                    .readHeight { h in
-                        controlsHeight = h
+                        .padding()
+                        .background(
+                            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                                .fill(.ultraThinMaterial)
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                                .strokeBorder(Color.white.opacity(0.25), lineWidth: 1)
+                        )
+                        .shadow(color: Color.black.opacity(0.3), radius: 20, x: 0, y: 16)
+                        .padding(.horizontal)
+                        .padding(.bottom, 16)
+                        .readHeight { h in
+                            controlsHeight = h
+                        }
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
                     }
                 }
             }
