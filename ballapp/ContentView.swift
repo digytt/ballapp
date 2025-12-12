@@ -2,6 +2,7 @@ import SwiftUI
 import Combine
 #if os(macOS)
 import AppKit
+import UniformTypeIdentifiers
 public typealias PlatformImage = NSImage
 public extension Image {
     init(platformImage: NSImage) {
@@ -43,6 +44,14 @@ private struct SimBall: Identifiable {
     let id = UUID()
     var position: CGPoint
     var velocity: CGVector
+    var color: Color
+}
+
+private enum ColorMode: String, CaseIterable, Identifiable {
+    case `static` = "Static"
+    case rainbow = "Rainbow"
+    case bounce = "Bounce"
+    var id: String { rawValue }
 }
 
 struct ContentView: View {
@@ -52,7 +61,7 @@ struct ContentView: View {
     @State private var ballSize: CGFloat = 40
     @State private var isRunning: Bool = true
     @State private var ballColor: Color = .blue
-    @State private var isRainbowMode: Bool = false
+    @State private var colorMode: ColorMode = .static
     
     @State private var selectedImage: PlatformImage? = nil
     @State private var useImageForBalls: Bool = false
@@ -110,57 +119,106 @@ struct ContentView: View {
             let t = CGFloat(i) / CGFloat(max(1, ballCount - 1))
             let x = minX + t * (maxX - minX)
             let y = minY + (1 - t) * (maxY - minY)
-            return SimBall(position: CGPoint(x: x, y: y), velocity: initialVelocity)
+            return SimBall(position: CGPoint(x: x, y: y), velocity: initialVelocity, color: ballColor)
         }
     }
 
     private func resolveBallCollisions() {
-        let r = ballSize / 2
         let restitution = isGravityEnabled ? self.restitution : 1.0
         let count = balls.count
         guard count > 1 else { return }
+        let extents = currentHalfExtents(for: selectedImage)
 
         for i in 0..<(count - 1) {
             for j in (i + 1)..<count {
                 // Skip the dragged ball to avoid fighting the user
                 if let dragging = draggingBallIndex, (dragging == i || dragging == j) { continue }
+
                 let pi = balls[i].position
                 let pj = balls[j].position
-                var dx = pj.x - pi.x
-                var dy = pj.y - pi.y
-                let distSq = dx*dx + dy*dy
-                let minDist = 2 * r
-                if distSq == 0 { continue }
-                if distSq < minDist * minDist {
-                    let dist = sqrt(distSq)
-                    // Normal vector from i -> j
-                    dx /= dist; dy /= dist
-                    // Penetration depth
-                    let penetration = minDist - dist
-                    // Push them apart equally
-                    let correction = penetration / 2
-                    balls[i].position.x -= dx * correction
-                    balls[i].position.y -= dy * correction
-                    balls[j].position.x += dx * correction
-                    balls[j].position.y += dy * correction
 
-                    // Compute relative velocity along the normal
-                    let vi = balls[i].velocity
-                    let vj = balls[j].velocity
-                    let rvx = vj.dx - vi.dx
-                    let rvy = vj.dy - vi.dy
-                    let relVelAlongNormal = rvx * dx + rvy * dy
-                    if relVelAlongNormal > 0 { continue } // already separating
+                if useImageForBalls, selectedImage != nil {
+                    // AABB collision using image half extents
+                    let halfW = extents.halfW
+                    let halfH = extents.halfH
 
-                    // Impulse scalar for equal masses
-                    let jImpulse = -(1 + restitution) * relVelAlongNormal / 2
-                    let impX = jImpulse * dx
-                    let impY = jImpulse * dy
+                    let dx = pj.x - pi.x
+                    let dy = pj.y - pi.y
+                    let overlapX = (halfW + halfW) - abs(dx)
+                    let overlapY = (halfH + halfH) - abs(dy)
 
-                    balls[i].velocity.dx -= impX
-                    balls[i].velocity.dy -= impY
-                    balls[j].velocity.dx += impX
-                    balls[j].velocity.dy += impY
+                    if overlapX > 0 && overlapY > 0 {
+                        let vi = balls[i].velocity
+                        let vj = balls[j].velocity
+                        // Resolve along the axis of least penetration
+                        if overlapX < overlapY {
+                            // Separate along X
+                            let correction = overlapX / 2 * (dx >= 0 ? -1 : 1)
+                            balls[i].position.x += correction
+                            balls[j].position.x -= correction
+
+                            // Reflect velocities along X with restitution
+                            balls[i].velocity.dx = -vi.dx * restitution
+                            balls[j].velocity.dx = -vj.dx * restitution
+                        } else {
+                            // Separate along Y
+                            let correction = overlapY / 2 * (dy >= 0 ? -1 : 1)
+                            balls[i].position.y += correction
+                            balls[j].position.y -= correction
+
+                            // Reflect velocities along Y with restitution
+                            balls[i].velocity.dy = -vi.dy * restitution
+                            balls[j].velocity.dy = -vj.dy * restitution
+                        }
+
+                        if colorMode == .bounce {
+                            balls[i].color = Color(hue: Double.random(in: 0...1), saturation: 0.9, brightness: 1.0)
+                            balls[j].color = Color(hue: Double.random(in: 0...1), saturation: 0.9, brightness: 1.0)
+                        }
+                    }
+                } else {
+                    // Circle-circle collision (original logic)
+                    var dx = pj.x - pi.x
+                    var dy = pj.y - pi.y
+                    let distSq = dx*dx + dy*dy
+                    let minDist = ballSize // two radii (2 * r), with r = ballSize/2
+                    if distSq == 0 { continue }
+                    if distSq < minDist * minDist {
+                        let dist = sqrt(distSq)
+                        // Normal vector from i -> j
+                        dx /= dist; dy /= dist
+                        // Penetration depth
+                        let penetration = minDist - dist
+                        // Push them apart equally
+                        let correction = penetration / 2
+                        balls[i].position.x -= dx * correction
+                        balls[i].position.y -= dy * correction
+                        balls[j].position.x += dx * correction
+                        balls[j].position.y += dy * correction
+
+                        // Compute relative velocity along the normal
+                        let vi = balls[i].velocity
+                        let vj = balls[j].velocity
+                        let rvx = vj.dx - vi.dx
+                        let rvy = vj.dy - vi.dy
+                        let relVelAlongNormal = rvx * dx + rvy * dy
+                        if relVelAlongNormal > 0 { continue } // already separating
+
+                        // Impulse scalar for equal masses
+                        let jImpulse = -(1 + restitution) * relVelAlongNormal / 2
+                        let impX = jImpulse * dx
+                        let impY = jImpulse * dy
+
+                        balls[i].velocity.dx -= impX
+                        balls[i].velocity.dy -= impY
+                        balls[j].velocity.dx += impX
+                        balls[j].velocity.dy += impY
+
+                        if colorMode == .bounce {
+                            balls[i].color = Color(hue: Double.random(in: 0...1), saturation: 0.9, brightness: 1.0)
+                            balls[j].color = Color(hue: Double.random(in: 0...1), saturation: 0.9, brightness: 1.0)
+                        }
+                    }
                 }
             }
         }
@@ -168,13 +226,9 @@ struct ContentView: View {
     
     private func currentHalfExtents(for image: PlatformImage?) -> (halfW: CGFloat, halfH: CGFloat) {
         if useImageForBalls, let img = image {
-            // Displayed height is 2x ballSize; width depends on aspect ratio
-            let displayH = ballSize * 5 // matches current rendering height
-            #if os(macOS)
+            // Displayed height is 5x ballSize; width depends on aspect ratio
+            let displayH = ballSize * 5
             let imgSize = img.size
-            #else
-            let imgSize = img.size
-            #endif
             let aspect = imgSize.width > 0 ? (imgSize.width / imgSize.height) : 1
             let displayW = displayH * aspect
             return (displayW / 2, displayH / 2)
@@ -187,7 +241,14 @@ struct ContentView: View {
     private func pickImage() {
         #if os(macOS)
         let panel = NSOpenPanel()
-        panel.allowedFileTypes = ["png", "jpg", "jpeg", "heic", "tiff", "gif", "bmp"]
+        panel.allowedContentTypes = [
+            .png,
+            .jpeg,
+            .heic,
+            .tiff,
+            .gif,
+            .bmp
+        ]
         panel.allowsMultipleSelection = false
         panel.canChooseDirectories = false
         panel.begin { response in
@@ -218,12 +279,12 @@ struct ContentView: View {
                         } else {
                             Circle()
                                 .fill(
-                                    LinearGradient(colors: [ballColor.opacity(0.95), ballColor],
+                                    LinearGradient(colors: [ball.color.opacity(0.95), ball.color],
                                                    startPoint: .topLeading,
                                                    endPoint: .bottomTrailing)
                                 )
                                 .frame(width: ballSize, height: ballSize)
-                                .shadow(color: ballColor.opacity(0.6), radius: 10, x: 0, y: 6)
+                                .shadow(color: ball.color.opacity(0.6), radius: 10, x: 0, y: 6)
                         }
                     }
                     .position(x: ball.position.x, y: ball.position.y)
@@ -297,7 +358,8 @@ struct ContentView: View {
                                     initialVelocity = CGVector(dx: 3, dy: 4)
                                     ballSize = defaultBallSize
                                     ballColor = .blue
-                                    isRainbowMode = false
+                                    for i in balls.indices { balls[i].color = .blue }
+                                    colorMode = .static
                                     // removed clearing image here
                                     //selectedImage = nil
                                     //useImageForBalls = false
@@ -360,22 +422,15 @@ struct ContentView: View {
                                     ColorPicker("Ball Color", selection: $ballColor, supportsOpacity: false)
                                         .labelsHidden()
                                         .frame(width: 44, height: 44)
-                                    Button(isRainbowMode ? "Rainbow: On" : "Rainbow: Off") {
-                                        isRainbowMode.toggle()
+                                        .disabled(colorMode == .bounce || colorMode == .rainbow || useImageForBalls)
+                                    Picker("", selection: $colorMode) {
+                                        Text("Static").tag(ColorMode.static)
+                                        Text("Rainbow").tag(ColorMode.rainbow)
+                                        Text("Bounce").tag(ColorMode.bounce)
                                     }
-                                    .buttonStyle(.bordered)
-                                    VStack(alignment: .leading, spacing: 4) {
-                                        Text("Balls").font(.caption)
-                                        TextField("Count", text: $ballCountText)
-                                            .textFieldStyle(.roundedBorder)
-                                            .frame(width: 80)
-                                            .onSubmit {
-                                                let n = Int(ballCountText) ?? ballCount
-                                                ballCount = clampBallCount(n)
-                                                ballCountText = String(ballCount)
-                                                reseedBalls(in: geo.size)
-                                            }
-                                    }
+                                    .pickerStyle(.segmented)
+                                    .frame(maxWidth: 220)
+                                    .disabled(useImageForBalls)
                                 }
                                 HStack(spacing: 8) {
                                     #if os(macOS)
@@ -394,6 +449,18 @@ struct ContentView: View {
                                         useImageForBalls = false
                                     }
                                     .buttonStyle(.bordered)
+                                    
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        TextField("Count", text: $ballCountText)
+                                            .textFieldStyle(.roundedBorder)
+                                            .frame(width: 80)
+                                            .onSubmit {
+                                                let n = Int(ballCountText) ?? ballCount
+                                                ballCount = clampBallCount(n)
+                                                ballCountText = String(ballCount)
+                                                reseedBalls(in: geo.size)
+                                            }
+                                    }
                                 }
                             }
                         }
@@ -412,6 +479,16 @@ struct ContentView: View {
                 ballCountText = String(ballCount)
                 reseedBalls(in: geo.size)
             }
+            .onChange(of: colorMode) { oldMode, newMode in
+                if newMode == .static {
+                    for i in balls.indices { balls[i].color = ballColor }
+                }
+            }
+            .onChange(of: ballColor) { oldColor, newColor in
+                if colorMode == .static {
+                    for i in balls.indices { balls[i].color = newColor }
+                }
+            }
             #if !os(macOS)
             .onChange(of: pickedItem) { oldValue, newValue in
                 guard let item = newValue else { return }
@@ -426,36 +503,35 @@ struct ContentView: View {
             }
             #endif
             .onReceive(Timer.publish(every: 1.0/60.0, on: .main, in: .common).autoconnect()) { _ in
-                // Rainbow color cycling
-                if isRainbowMode {
+                // Rainbow color cycling (only when active and no image is used)
+                if colorMode == .rainbow && !useImageForBalls {
                     rainbowHue = (rainbowHue + 0.003).truncatingRemainder(dividingBy: 1.0)
-                    withAnimation(.linear(duration: 1.0/60.0)) {
-                        ballColor = Color(hue: rainbowHue, saturation: 0.9, brightness: 1.0)
-                    }
+                    let newRainbow = Color(hue: rainbowHue, saturation: 0.9, brightness: 1.0)
+                    ballColor = newRainbow
+                    for i in balls.indices { balls[i].color = newRainbow }
                 }
 
                 // Gravity physics: apply acceleration and air drag when running and not dragging
                 if isRunning && isGravityEnabled && !isDragging {
                     for i in balls.indices {
-                        balls[i].velocity.dy += gravity
-                        balls[i].velocity = clampMagnitude(balls[i].velocity, max: terminalSpeed)
-                        balls[i].velocity.dx = applyAirDrag(balls[i].velocity.dx)
-                        balls[i].velocity.dy = applyAirDrag(balls[i].velocity.dy)
+                        var v = balls[i].velocity
+                        v.dy += gravity
+                        v.dx = applyAirDrag(v.dx)
+                        v.dy = applyAirDrag(v.dy)
+                        balls[i].velocity = clampMagnitude(v, max: terminalSpeed)
                     }
                 }
             }
             .onReceive(Timer.publish(every: 1.0/60.0, on: .main, in: .common).autoconnect()) { _ in
                 guard isRunning && !isDragging else { return }
 
-                let baseRadius = ballSize / 2
+                let extents = currentHalfExtents(for: selectedImage)
+                let minX = extents.halfW
+                let maxX = geo.size.width - extents.halfW
+                let minY = extents.halfH
+                let maxY = geo.size.height - extents.halfH - controlsHeight
 
                 for i in balls.indices {
-                    let extents = currentHalfExtents(for: selectedImage)
-                    let minX = extents.halfW
-                    let maxX = geo.size.width - extents.halfW
-                    let minY = extents.halfH
-                    let maxY = geo.size.height - extents.halfH - controlsHeight
-
                     if isGravityEnabled {
                         var vx = balls[i].velocity.dx * speedMultiplier
                         var vy = balls[i].velocity.dy * speedMultiplier
@@ -473,14 +549,22 @@ struct ContentView: View {
                         balls[i].velocity.dx = zeroIfSmall(balls[i].velocity.dx)
                         balls[i].velocity.dy = zeroIfSmall(balls[i].velocity.dy)
                         balls[i].position = CGPoint(x: newX, y: newY)
+
+                        if colorMode == .bounce && !useImageForBalls && (collidedHorizontally || collidedVertically) {
+                            balls[i].color = Color(hue: Double.random(in: 0...1), saturation: 0.9, brightness: 1.0)
+                        }
                     } else {
                         var newX = balls[i].position.x + balls[i].velocity.dx * speedMultiplier
                         var newY = balls[i].position.y + balls[i].velocity.dy * speedMultiplier
-                        if newX <= minX { newX = minX; balls[i].velocity.dx *= -1 }
-                        if newX >= maxX { newX = maxX; balls[i].velocity.dx *= -1 }
-                        if newY <= minY { newY = minY; balls[i].velocity.dy *= -1 }
-                        if newY >= maxY { newY = maxY; balls[i].velocity.dy *= -1 }
+                        var didBounce = false
+                        if newX <= minX { newX = minX; balls[i].velocity.dx *= -1; didBounce = true }
+                        if newX >= maxX { newX = maxX; balls[i].velocity.dx *= -1; didBounce = true }
+                        if newY <= minY { newY = minY; balls[i].velocity.dy *= -1; didBounce = true }
+                        if newY >= maxY { newY = maxY; balls[i].velocity.dy *= -1; didBounce = true }
                         balls[i].position = CGPoint(x: newX, y: newY)
+                        if colorMode == .bounce && !useImageForBalls && didBounce {
+                            balls[i].color = Color(hue: Double.random(in: 0...1), saturation: 0.9, brightness: 1.0)
+                        }
                     }
                 }
                 resolveBallCollisions()
