@@ -10,235 +10,6 @@ public extension Image {
     }
 }
 
-// MARK: - macOS Touch Bar Support
-#if os(macOS)
-private struct TouchBarAttacher: NSViewRepresentable {
-    @Binding var isRunning: Bool
-    @Binding var isGravityEnabled: Bool
-    @Binding var ballSize: CGFloat
-    @Binding var speedMultiplier: CGFloat
-    @Binding var colorMode: ColorMode
-    @Binding var ballColor: Color
-    let onReset: () -> Void
-
-    func makeCoordinator() -> Coordinator {
-        Coordinator(
-            isRunning: $isRunning,
-            isGravityEnabled: $isGravityEnabled,
-            ballSize: $ballSize,
-            speedMultiplier: $speedMultiplier,
-            colorMode: $colorMode,
-            ballColor: $ballColor,
-            onReset: onReset
-        )
-    }
-
-    func makeNSView(context: Context) -> NSView {
-        let view = NSView(frame: .zero)
-        DispatchQueue.main.async {
-            if let window = view.window {
-                window.makeFirstResponder(view)
-                if window.touchBar == nil {
-                    window.touchBar = makeTouchBar(with: context.coordinator)
-                }
-            }
-        }
-        return view
-    }
-
-    func updateNSView(_ nsView: NSView, context: Context) {
-        guard let window = nsView.window else { return }
-        if window.touchBar == nil {
-            window.touchBar = makeTouchBar(with: context.coordinator)
-        } else {
-            // Update existing items' state
-            if let touchBar = window.touchBar {
-                let items = touchBar.itemIdentifiers
-                for id in items {
-                    if let item = touchBar.item(forIdentifier: id) as? NSCustomTouchBarItem {
-                        let view = item.view
-                        if let button = view as? NSButton {
-                            switch id.rawValue {
-                            case "com.example.playpause":
-                                button.title = isRunning ? "Pause" : "Play"
-                            case "com.example.gravity":
-                                button.title = isGravityEnabled ? "Gravity On" : "Gravity Off"
-                            default: break
-                            }
-                        } else if let slider = view as? NSSlider {
-                            switch id.rawValue {
-                            case "com.example.size.slider":
-                                slider.doubleValue = Double(ballSize)
-                            case "com.example.speed.slider":
-                                slider.doubleValue = Double(speedMultiplier)
-                            default: break
-                            }
-                        } else if let segmented = view as? NSSegmentedControl {
-                            switch id.rawValue {
-                            case "com.example.colormode":
-                                segmented.selectedSegment = (colorMode == .static ? 0 : (colorMode == .rainbow ? 1 : 2))
-                            default:
-                                break
-                            }
-                        }
-                    }
-                    if let colorItem = touchBar.item(forIdentifier: id) as? NSColorPickerTouchBarItem {
-                        if id.rawValue == "com.example.colorpicker" {
-                            colorItem.color = NSColor(ballColor)
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    private func makeTouchBar(with coordinator: Coordinator) -> NSTouchBar {
-        let touchBar = NSTouchBar()
-        touchBar.customizationIdentifier = NSTouchBar.CustomizationIdentifier("com.example.bouncer.touchbar")
-        touchBar.defaultItemIdentifiers = [
-            NSTouchBarItem.Identifier("com.example.playpause"),
-            NSTouchBarItem.Identifier("com.example.reset"),
-            NSTouchBarItem.Identifier("com.example.gravity"),
-            NSTouchBarItem.Identifier.flexibleSpace,
-            NSTouchBarItem.Identifier("com.example.size"),
-            NSTouchBarItem.Identifier("com.example.speed"),
-            NSTouchBarItem.Identifier.flexibleSpace,
-            NSTouchBarItem.Identifier("com.example.colorpicker"),
-            NSTouchBarItem.Identifier("com.example.colormode")
-        ]
-        touchBar.customizationAllowedItemIdentifiers = touchBar.defaultItemIdentifiers
-
-        touchBar.delegate = coordinator
-        return touchBar
-    }
-
-    class Coordinator: NSObject, NSTouchBarDelegate {
-        @Binding var isRunning: Bool
-        @Binding var isGravityEnabled: Bool
-        @Binding var ballSize: CGFloat
-        @Binding var speedMultiplier: CGFloat
-        @Binding var colorMode: ColorMode
-        @Binding var ballColor: Color
-        let onReset: () -> Void
-
-        init(isRunning: Binding<Bool>, isGravityEnabled: Binding<Bool>, ballSize: Binding<CGFloat>, speedMultiplier: Binding<CGFloat>, colorMode: Binding<ColorMode>, ballColor: Binding<Color>, onReset: @escaping () -> Void) {
-            _isRunning = isRunning
-            _isGravityEnabled = isGravityEnabled
-            _ballSize = ballSize
-            _speedMultiplier = speedMultiplier
-            _colorMode = colorMode
-            _ballColor = ballColor
-            self.onReset = onReset
-        }
-
-        func touchBar(_ touchBar: NSTouchBar, makeItemForIdentifier identifier: NSTouchBarItem.Identifier) -> NSTouchBarItem? {
-            switch identifier.rawValue {
-            case "com.example.playpause":
-                let item = NSCustomTouchBarItem(identifier: identifier)
-                let button = NSButton(title: isRunning ? "Pause" : "Play", target: self, action: #selector(togglePlayPause))
-                item.view = button
-                return item
-            case "com.example.reset":
-                let item = NSCustomTouchBarItem(identifier: identifier)
-                let button = NSButton(title: "Reset", target: self, action: #selector(resetAction))
-                item.view = button
-                return item
-            case "com.example.gravity":
-                let item = NSCustomTouchBarItem(identifier: identifier)
-                let button = NSButton(title: isGravityEnabled ? "Gravity On" : "Gravity Off", target: self, action: #selector(toggleGravity))
-                item.view = button
-                return item
-            case "com.example.colorpicker":
-                let colorPicker = NSColorPickerTouchBarItem.colorPicker(withIdentifier: identifier)
-                colorPicker.target = self
-                colorPicker.action = #selector(colorPicked(_:))
-                colorPicker.color = NSColor(ballColor)
-                colorPicker.showsAlpha = false
-                colorPicker.customizationLabel = "Color"
-                return colorPicker
-            case "com.example.colormode":
-                let item = NSCustomTouchBarItem(identifier: identifier)
-                let segmented = NSSegmentedControl(labels: ["Static", "Rainbow", "Bounce"], trackingMode: .selectOne, target: self, action: #selector(colorModeChanged(_:)))
-                segmented.segmentStyle = .automatic
-                segmented.selectedSegment = (colorMode == .static ? 0 : (colorMode == .rainbow ? 1 : 2))
-                item.view = segmented
-                item.customizationLabel = "Color Mode"
-                return item
-            case "com.example.size":
-                let popItem = NSPopoverTouchBarItem(identifier: identifier)
-                popItem.collapsedRepresentationLabel = "Size"
-                // Build the popover touch bar containing the slider
-                let popTB = NSTouchBar()
-                popTB.customizationIdentifier = NSTouchBar.CustomizationIdentifier("com.example.bouncer.touchbar.sizepopover")
-                let sliderID = NSTouchBarItem.Identifier("com.example.size.slider")
-                popTB.defaultItemIdentifiers = [sliderID]
-                popTB.delegate = self
-                // Provide the slider via delegate as a custom item
-                // Store a closure to build the slider when requested
-                popItem.popoverTouchBar = popTB
-                return popItem
-            case "com.example.speed":
-                let popItem = NSPopoverTouchBarItem(identifier: identifier)
-                popItem.collapsedRepresentationLabel = "Speed"
-                let popTB = NSTouchBar()
-                popTB.customizationIdentifier = NSTouchBar.CustomizationIdentifier("com.example.bouncer.touchbar.speedpopover")
-                let sliderID = NSTouchBarItem.Identifier("com.example.speed.slider")
-                popTB.defaultItemIdentifiers = [sliderID]
-                popTB.delegate = self
-                popItem.popoverTouchBar = popTB
-                return popItem
-            case "com.example.size.slider":
-                let item = NSSliderTouchBarItem(identifier: identifier)
-                item.slider.minValue = 10
-                item.slider.maxValue = 120
-                item.slider.doubleValue = Double(ballSize)
-                item.target = self
-                item.action = #selector(sizeChangedTouchBar(_:))
-                item.label = "Size"
-                return item
-            case "com.example.speed.slider":
-                let item = NSSliderTouchBarItem(identifier: identifier)
-                item.slider.minValue = 0.2
-                item.slider.maxValue = 3.0
-                item.slider.doubleValue = Double(speedMultiplier)
-                item.target = self
-                item.action = #selector(speedChangedTouchBar(_:))
-                item.label = "Speed"
-                return item
-            default:
-                return nil
-            }
-        }
-
-        @objc private func togglePlayPause() { isRunning.toggle() }
-        @objc private func resetAction() { onReset() }
-        @objc private func toggleGravity() { isGravityEnabled.toggle() }
-        @objc private func sizeChanged(_ sender: NSSlider) { ballSize = CGFloat(sender.doubleValue) }
-        @objc private func speedChanged(_ sender: NSSlider) { speedMultiplier = CGFloat(sender.doubleValue) }
-        @objc private func sizeChangedTouchBar(_ sender: NSSliderTouchBarItem) {
-            ballSize = CGFloat(sender.doubleValue)
-        }
-        @objc private func speedChangedTouchBar(_ sender: NSSliderTouchBarItem) {
-            speedMultiplier = CGFloat(sender.doubleValue)
-        }
-        @objc private func colorModeChanged(_ sender: NSSegmentedControl) {
-            switch sender.selectedSegment {
-            case 0: colorMode = .static
-            case 1: colorMode = .rainbow
-            case 2: colorMode = .bounce
-            default: break
-            }
-        }
-        @objc private func colorPicked(_ sender: NSColorPickerTouchBarItem) {
-            guard colorMode == .static else { return }
-            let nsColor = sender.color
-            let swiftUIColor = Color(nsColor)
-            ballColor = swiftUIColor
-        }
-    }
-}
-#endif
-
 #if os(macOS)
 import Combine
 private struct KeyEventHandlingView: NSViewRepresentable {
@@ -246,15 +17,19 @@ private struct KeyEventHandlingView: NSViewRepresentable {
     func makeNSView(context: Context) -> NSView {
         let view = KeyCatcherView()
         view.handler = handler
-        DispatchQueue.main.async {
-            view.window?.makeFirstResponder(view)
-        }
         return view
     }
     func updateNSView(_ nsView: NSView, context: Context) {}
     final class KeyCatcherView: NSView {
         var handler: ((NSEvent) -> Bool)?
         override var acceptsFirstResponder: Bool { true }
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            // Make this view first responder when attached to a window to avoid async QoS inversion
+            if let window = self.window {
+                window.makeFirstResponder(self)
+            }
+        }
         override func keyDown(with event: NSEvent) {
             if handler?(event) == true { return }
             super.keyDown(with: event)
@@ -702,29 +477,33 @@ struct ContentView: View {
                                         Text(String(format: "x%.1f", Double(speedMultiplier))).font(.caption)
                                     }
                                     
-                                    // Drag (air resistance) — enabled only when gravity is on
-                                    HStack(spacing: 12) {
-                                        Text("Drag").font(.caption)
-                                        Slider(value: Binding(
-                                            get: { dragMultiplier },
-                                            set: { newVal in dragMultiplier = max(0.90, min(newVal, 1.0)) }
-                                        ), in: 0.90...1.0)
-                                        Text(String(format: "%.3f", Double(dragMultiplier))).font(.caption).monospacedDigit()
-                                    }
-                                    .disabled(!isGravityEnabled)
-                                    .opacity(isGravityEnabled ? 1.0 : 0.5)
+                                    // Drag and Gravity — side by side, enabled only when gravity is on
+                                    HStack(spacing: 24) {
+                                        // Drag (air resistance)
+                                        HStack(spacing: 12) {
+                                            Text("Drag").font(.caption)
+                                            Slider(value: Binding(
+                                                get: { dragMultiplier },
+                                                set: { newVal in dragMultiplier = max(0.90, min(newVal, 1.0)) }
+                                            ), in: 0.90...1.0)
+                                            Text(String(format: "%.3f", Double(dragMultiplier))).font(.caption).monospacedDigit()
+                                        }
+                                        .disabled(!isGravityEnabled)
+                                        .opacity(isGravityEnabled ? 1.0 : 0.5)
 
-                                    // Gravity intensity — enabled only when gravity is on
-                                    HStack(spacing: 12) {
-                                        Text("Gravity").font(.caption)
-                                        Slider(value: Binding(
-                                            get: { gravityIntensity },
-                                            set: { newVal in gravityIntensity = max(0.0, min(newVal, 2.0)) }
-                                        ), in: 0.0...2.0)
-                                        Text(String(format: "x%.1f", Double(gravityIntensity))).font(.caption)
+                                        // Gravity intensity
+                                        HStack(spacing: 12) {
+                                            Text("Gravity").font(.caption)
+                                            Slider(value: Binding(
+                                                get: { gravityIntensity },
+                                                set: { newVal in gravityIntensity = max(0.0, min(newVal, 2.0)) }
+                                            ), in: 0.0...2.0)
+                                            Text(String(format: "x%.1f", Double(gravityIntensity))).font(.caption)
+                                        }
+                                        .disabled(!isGravityEnabled)
+                                        .opacity(isGravityEnabled ? 1.0 : 0.5)
                                     }
-                                    .disabled(!isGravityEnabled)
-                                    .opacity(isGravityEnabled ? 1.0 : 0.5)
+
                                 }
 
                                 VStack(alignment: .leading, spacing: 8) {
@@ -827,17 +606,6 @@ struct ContentView: View {
                 }
                 return false
             })
-            .background(
-                TouchBarAttacher(
-                    isRunning: $isRunning,
-                    isGravityEnabled: $isGravityEnabled,
-                    ballSize: $ballSize,
-                    speedMultiplier: $speedMultiplier,
-                    colorMode: $colorMode,
-                    ballColor: $ballColor,
-                    onReset: { reseedBalls(in: geo.size); initialVelocity = CGVector(dx: 3, dy: 4); ballSize = defaultBallSize; ballColor = .blue; for i in balls.indices { balls[i].color = .blue }; colorMode = .static; rainbowHue = 0.0; isGravityEnabled = false; isDragging = false; dragStartPosition = .zero; speedMultiplier = 1.0; dragMultiplier = defaultAirDrag; gravityIntensity = 1.0 }
-                )
-            )
 #else
             .onKeyPress(.space) {
                 isRunning.toggle()
